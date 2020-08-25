@@ -87,7 +87,28 @@ static long edu_do_xor(struct edu_device *edu, unsigned long arg)
 
 static long edu_do_factorial(struct edu_device *edu, unsigned long arg)
 {
-    return -ENXIO;
+    struct edu_factorial_cmd __user *cmd = (void __user *)(arg);
+    u32 val_in, val_out, is_eval;
+    int i;
+
+    if (get_user(val_in, &cmd->val_in))
+        return -EINVAL;
+
+    iowrite32(val_in, edu->map + EDU_FACTORIAL);
+    while (1)
+    {
+        is_eval = ioread32(edu->map + EDU_STATUS);
+        if (!(is_eval & 0x01))
+            break;
+        for (i = 0; i < 10000; i++)
+            ;
+    }
+    val_out = ioread32(edu->map + EDU_FACTORIAL);
+
+    if (put_user(val_out, &cmd->val_out))
+        return -EINVAL;
+
+    return 0;
 }
 
 static long edu_do_intr(struct edu_device *edu, unsigned long arg)

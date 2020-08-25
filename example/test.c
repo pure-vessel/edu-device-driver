@@ -11,26 +11,38 @@ int main(int argc, char *argv[])
 {
     int fd, rc;
     struct edu_xor_cmd cmd_xor;
+    struct edu_factorial_cmd cmd_factorial;
     struct edu_intr_cmd cmd_intr;
     
     fd = open("/dev/edu0", O_RDWR);
-    if (fd == -1) {
+    if (fd == -1)
+    {
         printf("failed to open /dev/edu0 (rc = %d)\n", errno);
         return 1;
     }
 
     cmd_xor.val_in = 0x0;
     rc = ioctl(fd, EDU_IOCTL_XOR, &cmd_xor);
-    if (rc) {
+    if (rc)
+    {
         printf("EDU_IOCTL_XOR failed (rc = %d)\n", rc);
         return 1;
     }
-
     printf("cmd_xor.val_out = 0x%08"PRIx32"\n", cmd_xor.val_out);
+
+    cmd_factorial.val_in = 10;
+    rc = ioctl(fd, EDU_IOCTL_FACTORIAL, &cmd_factorial);
+    if (rc)
+    {
+        printf("EDU_IOCTL_FACTORIAL failed (rc = %d)\n", rc);
+        return 1;
+    }
+    printf("cmd_factorial.val_out = %"PRIi32"\n", cmd_factorial.val_out);
 
     cmd_intr.val_in = 0xdeadf00d;
     rc = ioctl(fd, EDU_IOCTL_INTR, &cmd_intr);
-    if (rc) {
+    if (rc)
+    {
         printf("EDU_IOCTL_INTR failed (rc = %d)\n", rc);
         return 1;
     }
