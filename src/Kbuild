@@ -1,0 +1,3 @@
+obj-m := edu.o
+
+ccflags-y := -I$(src)/../include
