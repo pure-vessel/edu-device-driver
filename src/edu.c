@@ -3,6 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/pci.h>
 #include <linux/cdev.h>
+#include <linux/processor.h>
 
 #include <edu.h>
 
@@ -18,31 +19,57 @@
 // Kernel error log macro.
 #define log_error(format, ...)  log(KERN_ERR, format, ##__VA_ARGS__)
 
+/***
+ * Edu device memory areas.
+ ***/
+// Identification memory shift.
 #define EDU_IDENT       0x00
+// Major version bit mask.
 #define EDU_IDENT_MASK_MAJOR  0xff000000
+// Minor version bit mask.
 #define EDU_IDENT_MASK_MINOR  0x00ff0000
+// Major version bit shift.
 #define EDU_IDENT_SHIFT_MAJOR 24
+// Minor version bit shift.
 #define EDU_IDENT_SHIFT_MINOR 16
+// Magic identification byte bit mask.
 #define EDU_IDENT_MASK_MAGIC  0x000000ff
+// Magic identification byte.
 #define EDU_IDENT_MAGIC       0xed
 
+// Value inversion operation (~x) memory shift.
 #define EDU_XOR         0x04
+// Factorial operation memory shift.
 #define EDU_FACTORIAL   0x08
+// Factorial evaluation status memory shift.
 #define EDU_STATUS      0x20
+// Factorial evaluation status itself bit mask.
 #define EDU_STATUS_COPMUTING  0x01
+// Factorial evaluation interruption raising flag bit mask.
 #define EDU_STATUS_RAISE_INTR 0x80
 
+// Interruption status memory shift. Contains raised interruption value.
 #define EDU_INTR_STATUS 0x24
+// Interruption raising memory shift.
 #define EDU_INTR_RAISE  0x60
+// Interruption acknowledge memory shift.
 #define EDU_INTR_ACK    0x64
 
+// Direct memory access source memory shift.
 #define EDU_DMA_SRC     0x80
+// Direct memory access destination memory shift.
 #define EDU_DMA_DEST    0x88
+// Direct memory access bytes count memory shift.
 #define EDU_DMA_CNT     0x90
+// Direct memory access operations memory shift.
 #define EDU_DMA_CMD     0x98
+// Direct memory access start transfer operation bit mask.
 #define EDU_DMA_CMD_START      0x01
+// Direct memory access RAM to EDU transfer direction bit mask.
 #define EDU_DMA_CMD_DIR_TO_EDU 0x00
+// Direct memory access EDU to RAM transfer direction bit mask.
 #define EDU_DMA_CMD_DIR_TO_RAM 0x02
+// Direct memory access operations interruption raising flag bit mask.
 #define EDU_DMA_CMD_RAISE_INTR 0x04
 
 // Edu device structure.
@@ -68,6 +95,7 @@ static struct class *edu_class;
 // Created devices amount.
 static atomic_t n_devices = ATOMIC_INIT(0);
 
+// Function performing negate operation.
 static long edu_do_xor(struct edu_device *edu, unsigned long arg)
 {
     struct edu_xor_cmd __user *cmd = (void __user *)(arg);
@@ -85,32 +113,33 @@ static long edu_do_xor(struct edu_device *edu, unsigned long arg)
     return 0;
 }
 
+static int is_eval; // Is factorial evaluated flag.
+
+// Function performing factorial operation.
 static long edu_do_factorial(struct edu_device *edu, unsigned long arg)
 {
     struct edu_factorial_cmd __user *cmd = (void __user *)(arg);
-    u32 val_in, val_out, is_eval;
-    int i;
+    u32 val_in, val_out;
 
     if (get_user(val_in, &cmd->val_in))
         return -EINVAL;
 
+    iowrite32((u32)EDU_STATUS_RAISE_INTR, edu->map + EDU_STATUS);
     iowrite32(val_in, edu->map + EDU_FACTORIAL);
-    while (1)
-    {
-        is_eval = ioread32(edu->map + EDU_STATUS);
-        if (!(is_eval & 0x01))
-            break;
-        for (i = 0; i < 10000; i++)
-            ;
-    }
-    val_out = ioread32(edu->map + EDU_FACTORIAL);
+    is_eval = 0;
+    spin_begin();
+    while (!is_eval)
+        spin_cpu_relax();
+    spin_end();
 
+    val_out = ioread32(edu->map + EDU_FACTORIAL);
     if (put_user(val_out, &cmd->val_out))
         return -EINVAL;
 
     return 0;
 }
 
+// Function raising interruption operation.
 static long edu_do_intr(struct edu_device *edu, unsigned long arg)
 {
     struct edu_intr_cmd __user *cmd = (void __user *)(arg);
@@ -125,10 +154,9 @@ static long edu_do_intr(struct edu_device *edu, unsigned long arg)
 }
 
 
-
-// I/O control.
+// I/O control device function.
 // file - opened device properties.
-// cmd - I/O contril operation type.
+// cmd - I/O control operation type.
 // arg - operation argument.
 static long edu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -173,7 +201,9 @@ static int edu_open(struct inode *inode, struct file *file)
     return 0;
 }
 
-// Close file.
+// I/O control.
+// inode - device index node.
+// file - opened device properties.
 static int edu_release(struct inode *inode, struct file *file)
 {
     struct edu_device *edu = file->private_data;
@@ -207,11 +237,11 @@ static int edu_create_chardev(struct edu_device *edu)
     n = atomic_fetch_add(1, &n_devices);
     // Evaluating device version.
     devt = MKDEV(EDU_MAJOR, n);
-    // Setting openengs count as 0.
+    // Setting openings count as 0.
     edu->open_count = 0;
-    // Initializating mutex.
+    // Initializing mutex.
     mutex_init(&edu->lock);
-    // Initializating character device structure.
+    // Initializing character device structure.
     cdev_init(&edu->cdev, &edu_fops);
     // Seting character device owner.
     edu->cdev.owner = THIS_MODULE; // They say, that SET_MODULE_OWNER is more universal.
@@ -255,8 +285,10 @@ static irqreturn_t edu_irq(int irq, void *data)
     if (!status)
         return IRQ_NONE;
 
-    log_info("%s: got interrupted (%x)", pci_name(dev), status);
-    // Write that interruption proocessed.
+    is_eval = 1;
+
+    log_info("%s: got interrupted (0x%x)", pci_name(dev), status);
+    // Write that interruption processed.
     iowrite32(status, edu->map + EDU_INTR_ACK);
 
     return IRQ_HANDLED;
@@ -297,7 +329,7 @@ static int edu_probe(struct pci_dev *dev, const struct pci_device_id *id)
     int rc;
     struct edu_device *edu;
 
-    // Allocationg memory for device.
+    // Allocating memory for device.
     edu = devm_kzalloc(&dev->dev, sizeof(struct edu_device), GFP_KERNEL);
     if (!edu)
         return -ENODEV;
@@ -448,6 +480,3 @@ MODULE_AUTHOR("Ivanov Timophey");
 MODULE_DESCRIPTION("QEMU's 'edu' device driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("2");
-
-
-// insmod, dmesg, rmmod
